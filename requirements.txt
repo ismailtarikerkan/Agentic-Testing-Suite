@@ -12,3 +12,6 @@ uvicorn[standard]
 pytest
 pytest-asyncio
 httpx
+
+# Agent-in-the-loop test harness (tests/agent_harness.py)
+anthropic
