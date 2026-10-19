@@ -7,17 +7,101 @@ import os
 import signal
 import sys
 from typing import Any
+from urllib.parse import urljoin
+
+import httpx
 
 from ..config import BackendConfig
 from .base import BaseTransport, MCPMessage
 
 logger = logging.getLogger("proxy.stdio")
 
+HTTP_CONNECT_TIMEOUT = 10.0
+HTTP_RESPONSE_TIMEOUT = 30.0
+
+
+class _HttpSseBackend:
+    """One remote MCP backend reached over HTTP+SSE — the client-side
+    mirror of mcpsec/proxy/sse_transport.py's server-side implementation:
+    GET <url> opens an SSE stream whose first event gives the POST URL to
+    send JSON-RPC messages to; responses arrive asynchronously back over
+    that same SSE stream, matched to requests by `id`."""
+
+    def __init__(self, url: str) -> None:
+        self._url = url
+        self._client: httpx.AsyncClient | None = None
+        self._post_url: str | None = None
+        self._pending: dict[Any, asyncio.Future] = {}
+        self._listen_task: asyncio.Task | None = None
+        self._ready = asyncio.Event()
+
+    async def connect(self) -> None:
+        self._client = httpx.AsyncClient(timeout=None)
+        self._listen_task = asyncio.create_task(self._listen())
+        await asyncio.wait_for(self._ready.wait(), timeout=HTTP_CONNECT_TIMEOUT)
+
+    async def _listen(self) -> None:
+        assert self._client is not None
+        try:
+            async with self._client.stream("GET", self._url, headers={"Accept": "text/event-stream"}) as resp:
+                event_type: str | None = None
+                async for line in resp.aiter_lines():
+                    if line.startswith("event:"):
+                        event_type = line[len("event:"):].strip()
+                        continue
+                    if not line.startswith("data:"):
+                        continue
+                    data = line[len("data:"):].strip()
+                    if event_type == "endpoint":
+                        self._post_url = urljoin(self._url, data)
+                        self._ready.set()
+                    else:
+                        try:
+                            msg = json.loads(data)
+                        except json.JSONDecodeError:
+                            continue
+                        fut = self._pending.pop(msg.get("id"), None)
+                        if fut is not None and not fut.done():
+                            fut.set_result(msg)
+                    event_type = None
+        except Exception as exc:
+            logger.warning("HTTP+SSE backend stream ended (%s): %s", self._url, exc)
+        finally:
+            # Unblock anything still waiting on a response that'll never arrive.
+            for fut in self._pending.values():
+                if not fut.done():
+                    fut.set_exception(RuntimeError("SSE stream closed."))
+            self._pending.clear()
+
+    async def send(self, payload: dict[str, Any]) -> dict[str, Any]:
+        if self._client is None or self._post_url is None:
+            raise RuntimeError("HTTP backend not connected.")
+        loop = asyncio.get_event_loop()
+        fut: asyncio.Future = loop.create_future()
+        self._pending[payload.get("id")] = fut
+        await self._client.post(self._post_url, json=payload)
+        return await asyncio.wait_for(fut, timeout=HTTP_RESPONSE_TIMEOUT)
+
+    async def send_notification(self, payload: dict[str, Any]) -> None:
+        if self._client is None or self._post_url is None:
+            return
+        await self._client.post(self._post_url, json=payload)
+
+    def is_alive(self) -> bool:
+        return self._listen_task is not None and not self._listen_task.done()
+
+    async def close(self) -> None:
+        if self._listen_task is not None:
+            self._listen_task.cancel()
+        if self._client is not None:
+            await self._client.aclose()
+
 
 class StdioTransport(BaseTransport):
     def __init__(self, backends: list[BackendConfig]) -> None:
         self._backend_configs: dict[str, BackendConfig] = {b.name: b for b in backends}
         self._processes: dict[str, asyncio.subprocess.Process] = {}
+        self._http_backends: dict[str, _HttpSseBackend] = {}
         self._locks: dict[str, asyncio.Lock] = {}
 
     async def start(self) -> None:
@@ -30,6 +114,8 @@ class StdioTransport(BaseTransport):
         return await self._spawn(backend)
 
     async def _spawn(self, backend: BackendConfig) -> bool:
+        if backend.transport == "http":
+            return await self._connect_http(backend)
         if backend.command is None:
             logger.error("Backend '%s' has no command configured.", backend.name)
             return False
@@ -52,6 +138,22 @@ class StdioTransport(BaseTransport):
         except Exception as exc:
             logger.error("Failed to spawn backend '%s': %s", backend.name, exc)
             return False
+
+    async def _connect_http(self, backend: BackendConfig) -> bool:
+        if not backend.url:
+            logger.error("Backend '%s' has no url configured.", backend.name)
+            return False
+        conn = _HttpSseBackend(backend.url)
+        try:
+            await conn.connect()
+        except Exception as exc:
+            logger.error("Failed to connect HTTP backend '%s' (%s): %s", backend.name, backend.url, exc)
+            return False
+        self._http_backends[backend.name] = conn
+        if backend.name not in self._locks:
+            self._locks[backend.name] = asyncio.Lock()
+        logger.info("Backend '%s' connected via HTTP+SSE (%s).", backend.name, backend.url)
+        return True
 
     async def _drain_stderr(self, name: str, proc: asyncio.subprocess.Process) -> None:
         """Read and log stderr from a backend process."""
@@ -94,6 +196,17 @@ class StdioTransport(BaseTransport):
             return await self._send_to_backend_unlocked(backend_name, msg)
 
     async def _send_to_backend_unlocked(self, backend_name: str, msg: MCPMessage) -> MCPMessage:
+        http_conn = self._http_backends.get(backend_name)
+        if http_conn is not None:
+            try:
+                data = await http_conn.send(msg.to_dict())
+                return MCPMessage.from_dict(data)
+            except Exception as exc:
+                logger.error("Error communicating with HTTP backend '%s': %s", backend_name, exc)
+                return MCPMessage.make_error(
+                    msg.id, -32000, f"Backend '{backend_name}' (http) did not respond: {exc}"
+                )
+
         proc = self._processes.get(backend_name)
         if proc is None or proc.returncode is not None:
             # Try to respawn
@@ -176,6 +289,14 @@ class StdioTransport(BaseTransport):
 
     async def send_notification_to_backend(self, backend_name: str, msg: MCPMessage) -> None:
         """Send a message to a backend without waiting for a response (notifications/responses)."""
+        http_conn = self._http_backends.get(backend_name)
+        if http_conn is not None:
+            try:
+                await http_conn.send_notification(msg.to_dict())
+            except Exception as exc:
+                logger.warning("Failed to send notification to HTTP backend '%s': %s", backend_name, exc)
+            return
+
         proc = self._processes.get(backend_name)
         if proc is None or proc.returncode is not None:
             return
@@ -202,6 +323,9 @@ class StdioTransport(BaseTransport):
 
     async def remove_backend(self, name: str) -> bool:
         """Stop and forget a single backend — for live/hot-remove."""
+        http_conn = self._http_backends.pop(name, None)
+        if http_conn is not None:
+            await http_conn.close()
         proc = self._processes.get(name)
         if proc is not None and proc.returncode is None:
             await self._terminate(name, proc)
@@ -211,6 +335,9 @@ class StdioTransport(BaseTransport):
         return True
 
     async def close(self) -> None:
+        for name, conn in list(self._http_backends.items()):
+            await conn.close()
+        self._http_backends.clear()
         for name, proc in list(self._processes.items()):
             if proc.returncode is not None:
                 continue
@@ -222,11 +349,17 @@ class StdioTransport(BaseTransport):
     # ------------------------------------------------------------------
 
     def running_backends(self) -> list[str]:
-        return [
+        stdio_running = [
             name
             for name, proc in self._processes.items()
             if proc.returncode is None
         ]
+        http_running = [
+            name
+            for name, conn in self._http_backends.items()
+            if conn.is_alive()
+        ]
+        return stdio_running + http_running
 
     def all_backend_names(self) -> list[str]:
         return list(self._backend_configs.keys())
