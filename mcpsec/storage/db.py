@@ -54,5 +54,12 @@ def init_db() -> None:
                 updated_at   TEXT NOT NULL
             )
         """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS tool_label_overrides (
+                tool_name  TEXT PRIMARY KEY,
+                labels     TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+        """)
     conn.close()
     logger.info("SQLite DB ready: %s", _DB_PATH)

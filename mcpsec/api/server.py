@@ -14,6 +14,7 @@ from .routes import (
     config,
     events,
     features,
+    overrides,
     proxy,
     rescan,
     routing,
@@ -44,6 +45,7 @@ def create_app() -> FastAPI:
     app.include_router(config.router)
     app.include_router(proxy.router)
     app.include_router(backends.router)
+    app.include_router(overrides.router)
     app.include_router(rules.router)
     app.include_router(features.router)
     app.include_router(rescan.router)

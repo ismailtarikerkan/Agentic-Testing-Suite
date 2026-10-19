@@ -52,12 +52,15 @@ async def list_backends() -> list[dict[str, Any]]:
         for tool_name in backend_tools.get(backend.name, []):
             tool_def = tool_defs.get(tool_name, {})
             labels: list[str] = []
+            overridden = False
             if state.proxy is not None and state.proxy.chain_tracker is not None:
                 labels = state.proxy.chain_tracker.get_labels(tool_name)
+                overridden = state.proxy.chain_tracker.is_overridden(tool_name)
             tools.append({
                 "name": tool_name,
                 "description": tool_def.get("description", ""),
                 "labels": labels,
+                "overridden": overridden,
             })
         entry["tools"] = tools
 

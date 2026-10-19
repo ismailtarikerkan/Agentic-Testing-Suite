@@ -216,6 +216,35 @@ class EventRepository:
             "backend_to_tools": backend_to_tools,
         }
 
+    def set_label_override(self, tool_name: str, labels: list[str]) -> None:
+        """Persist a human-corrected U/S/E label set for a tool. Survives
+        toxic-flow re-runs (rescan / add-backend / remove-backend)."""
+        now = datetime.now(tz=timezone.utc).isoformat()
+        with self._lock:
+            conn = get_connection()
+            with conn:
+                conn.execute("""
+                    INSERT INTO tool_label_overrides (tool_name, labels, updated_at)
+                    VALUES (?, ?, ?)
+                    ON CONFLICT(tool_name) DO UPDATE SET
+                        labels     = excluded.labels,
+                        updated_at = excluded.updated_at
+                """, (tool_name, json.dumps(labels), now))
+            conn.close()
+
+    def delete_label_override(self, tool_name: str) -> None:
+        with self._lock:
+            conn = get_connection()
+            with conn:
+                conn.execute("DELETE FROM tool_label_overrides WHERE tool_name = ?", (tool_name,))
+            conn.close()
+
+    def get_label_overrides(self) -> dict[str, list[str]]:
+        conn = get_connection()
+        rows = conn.execute("SELECT tool_name, labels FROM tool_label_overrides").fetchall()
+        conn.close()
+        return {r["tool_name"]: json.loads(r["labels"]) for r in rows}
+
     def get_stats(self) -> dict[str, Any]:
         conn = get_connection()
         sessions_total = conn.execute("SELECT COUNT(*) FROM sessions").fetchone()[0]

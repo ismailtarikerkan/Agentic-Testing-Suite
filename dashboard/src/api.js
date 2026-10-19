@@ -66,6 +66,10 @@ export const deleteBackend = (name) => del(`/backends/${name}`)
 export const triggerRescan = () => post('/rescan')
 export const resetRuntimeState = () => post('/backends/reset-runtime')
 
+// Label overrides
+export const setLabelOverride = (toolName, labels) => put(`/overrides/${toolName}`, { labels })
+export const clearLabelOverride = (toolName) => del(`/overrides/${toolName}`)
+
 // Anomaly config
 export const fetchAnomalyConfig = () => get('/anomaly-config')
 export const updateAnomalyConfig = (cfg) => put('/anomaly-config', cfg)

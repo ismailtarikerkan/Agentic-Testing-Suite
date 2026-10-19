@@ -1,5 +1,10 @@
 import { useState, useEffect, useCallback } from 'react'
-import { fetchBackends, addBackend, deleteBackend, resetRuntimeState, triggerRescan } from '../api'
+import {
+  fetchBackends, addBackend, deleteBackend, resetRuntimeState, triggerRescan,
+  setLabelOverride, clearLabelOverride,
+} from '../api'
+
+const ALL_LABELS = ['U', 'S', 'E']
 
 const LABEL_STYLES = {
   U: 'bg-purple-900 text-purple-200 border border-purple-700',
@@ -24,21 +29,106 @@ function StatusDot({ status }) {
   return <span className={`w-2 h-2 rounded-full flex-shrink-0 ${color}`} />
 }
 
-function ToolRow({ tool }) {
+function ToolRow({ tool, onSetOverride, onClearOverride }) {
+  const [editing, setEditing] = useState(false)
+  const [selected, setSelected] = useState(tool.labels || [])
+  const [saving, setSaving] = useState(false)
+
+  useEffect(() => {
+    if (!editing) setSelected(tool.labels || [])
+  }, [tool.labels, editing])
+
+  const toggle = (label) => {
+    setSelected((prev) => (prev.includes(label) ? prev.filter((l) => l !== label) : [...prev, label]))
+  }
+
+  const handleSave = async () => {
+    setSaving(true)
+    try {
+      await onSetOverride(tool.name, selected)
+      setEditing(false)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const handleReset = async () => {
+    setSaving(true)
+    try {
+      await onClearOverride(tool.name)
+      setEditing(false)
+    } finally {
+      setSaving(false)
+    }
+  }
+
   return (
     <div className="flex items-start gap-2 py-1.5 border-t border-gray-800/60 first:border-t-0">
       <span className="mono text-xs text-gray-300 flex-shrink-0 w-44 truncate" title={tool.name}>
         {tool.name}
       </span>
       <span className="text-xs text-gray-500 flex-1 leading-snug">{tool.description || '—'}</span>
-      <div className="flex gap-1 flex-shrink-0">
-        {tool.labels?.map((l) => <LabelBadge key={l} label={l} />)}
-      </div>
+
+      {!editing ? (
+        <div className="flex items-center gap-1 flex-shrink-0">
+          {tool.labels?.map((l) => <LabelBadge key={l} label={l} />)}
+          {tool.labels?.length === 0 && <span className="text-xs text-gray-700">no labels</span>}
+          {tool.overridden && (
+            <span className="text-xs text-amber-400" title="Manually overridden">✎</span>
+          )}
+          <button
+            onClick={() => setEditing(true)}
+            className="text-gray-600 hover:text-gray-300 transition-colors ml-1"
+            title="Edit labels"
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" className="w-3.5 h-3.5">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L6.832 19.82a4.5 4.5 0 01-1.897 1.13l-2.685.8.8-2.685a4.5 4.5 0 011.13-1.897L16.863 4.487z" />
+            </svg>
+          </button>
+        </div>
+      ) : (
+        <div className="flex items-center gap-1 flex-shrink-0">
+          {ALL_LABELS.map((l) => (
+            <button
+              key={l}
+              type="button"
+              onClick={() => toggle(l)}
+              className={`text-xs px-1.5 py-0.5 rounded font-bold mono border transition-colors ${
+                selected.includes(l) ? LABEL_STYLES[l] : 'bg-gray-800 text-gray-600 border-gray-700'
+              }`}
+            >
+              {l}
+            </button>
+          ))}
+          <button
+            onClick={handleSave}
+            disabled={saving}
+            className="text-xs text-blue-400 hover:text-blue-300 ml-1 disabled:opacity-40"
+          >
+            Save
+          </button>
+          {tool.overridden && (
+            <button
+              onClick={handleReset}
+              disabled={saving}
+              className="text-xs text-gray-500 hover:text-gray-300 disabled:opacity-40"
+            >
+              Reset
+            </button>
+          )}
+          <button
+            onClick={() => { setEditing(false); setSelected(tool.labels || []) }}
+            className="text-xs text-gray-600 hover:text-gray-400"
+          >
+            ✕
+          </button>
+        </div>
+      )}
     </div>
   )
 }
 
-function BackendCard({ backend, onDelete, deleting }) {
+function BackendCard({ backend, onDelete, deleting, onSetOverride, onClearOverride }) {
   const [expanded, setExpanded] = useState(false)
   const toolCount = backend.tools?.length ?? 0
 
@@ -105,7 +195,14 @@ function BackendCard({ backend, onDelete, deleting }) {
           {toolCount === 0 && (
             <p className="text-xs text-gray-600 py-2">No tools discovered yet.</p>
           )}
-          {backend.tools?.map((tool) => <ToolRow key={tool.name} tool={tool} />)}
+          {backend.tools?.map((tool) => (
+            <ToolRow
+              key={tool.name}
+              tool={tool}
+              onSetOverride={onSetOverride}
+              onClearOverride={onClearOverride}
+            />
+          ))}
         </div>
       )}
     </div>
@@ -304,6 +401,24 @@ export default function BackendsPanel({ onRescan, onRuntimeReset }) {
     await load()
   }
 
+  const handleSetOverride = async (toolName, labels) => {
+    try {
+      await setLabelOverride(toolName, labels)
+      await load()
+    } catch (e) {
+      setRescanMsg(`Failed to set override for '${toolName}': ${e.message}`)
+    }
+  }
+
+  const handleClearOverride = async (toolName) => {
+    try {
+      await clearLabelOverride(toolName)
+      await load()
+    } catch (e) {
+      setRescanMsg(`Failed to reset override for '${toolName}': ${e.message}`)
+    }
+  }
+
   const handleDelete = async (name) => {
     const confirmed = window.confirm(`Remove MCP server '${name}'?`)
     if (!confirmed) return
@@ -401,6 +516,8 @@ export default function BackendsPanel({ onRescan, onRuntimeReset }) {
             backend={backend}
             onDelete={handleDelete}
             deleting={deletingName === backend.name}
+            onSetOverride={handleSetOverride}
+            onClearOverride={handleClearOverride}
           />
         ))}
 

@@ -49,10 +49,13 @@ class ChainTrackingResult:
 class ChainTracker:
     def __init__(self, config: Any, toxic_flow_result_path: str) -> None:
         self._config = config
+        self._auto_label_map: dict[str, list[str]] = {}
         self._label_map: dict[str, list[str]] = {}
+        self._overridden: set[str] = set()
         self._dangerous_paths: list[dict[str, Any]] = []
         self._enabled: bool = config.enabled
         self._load_toxic_flow(toxic_flow_result_path)
+        self._load_overrides()
 
     # ------------------------------------------------------------------
     # Startup
@@ -72,7 +75,8 @@ class ChainTracker:
             for tool_name, tool_data in tools.items():
                 labels: list[str] = tool_data.get("labels", [])
                 if labels:
-                    self._label_map[tool_name] = labels
+                    self._auto_label_map[tool_name] = labels
+            self._label_map = dict(self._auto_label_map)
             self._dangerous_paths = data.get("dangerous_paths", [])
             logger.info(
                 "ChainTracker loaded label_map for %d tools, %d dangerous paths",
@@ -83,8 +87,45 @@ class ChainTracker:
             logger.error("ChainTracker failed to load toxic_flow result: %s", exc)
             self._enabled = False
 
+    def _load_overrides(self) -> None:
+        """Human-corrected labels persist across toxic-flow re-runs (rescan /
+        add-backend / remove-backend all reconstruct ChainTracker from
+        scratch) — re-apply them on top of the freshly computed auto labels."""
+        try:
+            from ..storage.repository import EventRepository  # noqa: PLC0415
+
+            overrides = EventRepository().get_label_overrides()
+        except Exception as exc:
+            logger.error("ChainTracker failed to load label overrides: %s", exc)
+            return
+        for tool_name, labels in overrides.items():
+            self._label_map[tool_name] = labels
+            self._overridden.add(tool_name)
+        if overrides:
+            logger.info("ChainTracker applied %d label override(s).", len(overrides))
+
     def get_labels(self, tool_name: str) -> list[str]:
         return self._label_map.get(tool_name, [])
+
+    def get_auto_labels(self, tool_name: str) -> list[str]:
+        return self._auto_label_map.get(tool_name, [])
+
+    def is_overridden(self, tool_name: str) -> bool:
+        return tool_name in self._overridden
+
+    def set_override(self, tool_name: str, labels: list[str]) -> None:
+        from ..storage.repository import EventRepository  # noqa: PLC0415
+
+        EventRepository().set_label_override(tool_name, labels)
+        self._label_map[tool_name] = labels
+        self._overridden.add(tool_name)
+
+    def clear_override(self, tool_name: str) -> None:
+        from ..storage.repository import EventRepository  # noqa: PLC0415
+
+        EventRepository().delete_label_override(tool_name)
+        self._label_map[tool_name] = list(self._auto_label_map.get(tool_name, []))
+        self._overridden.discard(tool_name)
 
     # ------------------------------------------------------------------
     # Main entry point
