@@ -39,6 +39,13 @@ async def list_backends() -> list[dict[str, Any]]:
     if state.router is not None:
         backend_tools = state.router.get_all_tools()
 
+    discovery_tools: dict[str, dict[str, Any]] = {}
+    if state.proxy is not None and state.proxy.discovery is not None:
+        disc_result = state.proxy.discovery.get_result() or {}
+        for _backend_name, backend_data in disc_result.get("backends", {}).items():
+            for tool_name, tool_entry in backend_data.get("tools", {}).items():
+                discovery_tools[tool_name] = tool_entry
+
     result = []
     for backend in state.config.backends:
         entry = backend.model_dump()
@@ -56,11 +63,14 @@ async def list_backends() -> list[dict[str, Any]]:
             if state.proxy is not None and state.proxy.chain_tracker is not None:
                 labels = state.proxy.chain_tracker.get_labels(tool_name)
                 overridden = state.proxy.chain_tracker.is_overridden(tool_name)
+            disc_entry = discovery_tools.get(tool_name, {})
             tools.append({
                 "name": tool_name,
                 "description": tool_def.get("description", ""),
                 "labels": labels,
                 "overridden": overridden,
+                "security_grade": disc_entry.get("security_grade", "unknown"),
+                "probe_findings": disc_entry.get("probe_findings", []),
             })
         entry["tools"] = tools
 

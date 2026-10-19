@@ -24,6 +24,41 @@ function LabelBadge({ label }) {
   )
 }
 
+const GRADE_STYLES = {
+  A: 'bg-green-900 text-green-300 border border-green-700',
+  B: 'bg-green-900 text-green-400 border border-green-800',
+  C: 'bg-yellow-900 text-yellow-300 border border-yellow-700',
+  D: 'bg-orange-900 text-orange-300 border border-orange-700',
+  F: 'bg-red-900 text-red-300 border border-red-700',
+}
+
+const FINDING_SEVERITY_STYLES = {
+  CRITICAL: 'text-red-400',
+  HIGH: 'text-orange-400',
+  MEDIUM: 'text-yellow-400',
+  LOW: 'text-gray-500',
+}
+
+function GradeBadge({ grade, onClick, clickable }) {
+  if (!grade || grade === 'unknown' || grade === 'skipped') {
+    return (
+      <span className="text-xs px-1.5 py-0.5 rounded font-bold bg-gray-800 text-gray-600" title="Not probed">
+        {grade === 'skipped' ? '—' : '?'}
+      </span>
+    )
+  }
+  const style = GRADE_STYLES[grade] ?? 'bg-gray-800 text-gray-500'
+  return (
+    <span
+      onClick={onClick}
+      className={`text-xs px-1.5 py-0.5 rounded font-bold mono ${style} ${clickable ? 'cursor-pointer' : ''}`}
+      title="Schema-probing security grade (A = validated inputs well, F = accepted malformed/malicious input)"
+    >
+      {grade}
+    </span>
+  )
+}
+
 function StatusDot({ status }) {
   const color = status === 'running' ? 'bg-green-500' : 'bg-red-500'
   return <span className={`w-2 h-2 rounded-full flex-shrink-0 ${color}`} />
@@ -33,6 +68,8 @@ function ToolRow({ tool, onSetOverride, onClearOverride }) {
   const [editing, setEditing] = useState(false)
   const [selected, setSelected] = useState(tool.labels || [])
   const [saving, setSaving] = useState(false)
+  const [showFindings, setShowFindings] = useState(false)
+  const hasFindings = tool.probe_findings?.length > 0
 
   useEffect(() => {
     if (!editing) setSelected(tool.labels || [])
@@ -63,7 +100,8 @@ function ToolRow({ tool, onSetOverride, onClearOverride }) {
   }
 
   return (
-    <div className="flex items-start gap-2 py-1.5 border-t border-gray-800/60 first:border-t-0">
+    <div className="py-1.5 border-t border-gray-800/60 first:border-t-0">
+    <div className="flex items-start gap-2">
       <span className="mono text-xs text-gray-300 flex-shrink-0 w-44 truncate" title={tool.name}>
         {tool.name}
       </span>
@@ -71,6 +109,11 @@ function ToolRow({ tool, onSetOverride, onClearOverride }) {
 
       {!editing ? (
         <div className="flex items-center gap-1 flex-shrink-0">
+          <GradeBadge
+            grade={tool.security_grade}
+            clickable={hasFindings}
+            onClick={() => hasFindings && setShowFindings((s) => !s)}
+          />
           {tool.labels?.map((l) => <LabelBadge key={l} label={l} />)}
           {tool.labels?.length === 0 && <span className="text-xs text-gray-700">no labels</span>}
           {tool.overridden && (
@@ -124,6 +167,21 @@ function ToolRow({ tool, onSetOverride, onClearOverride }) {
           </button>
         </div>
       )}
+    </div>
+
+    {showFindings && hasFindings && (
+      <div className="mt-1.5 ml-2 space-y-0.5">
+        {tool.probe_findings.map((f, i) => (
+          <div key={i} className="text-xs flex gap-2">
+            <span className="text-gray-600 mono w-24 flex-shrink-0 truncate">{f.param}</span>
+            <span className="text-gray-500 w-28 flex-shrink-0">{f.test}</span>
+            <span className={FINDING_SEVERITY_STYLES[f.severity] ?? 'text-gray-500'}>
+              {f.result}{f.severity ? ` (${f.severity})` : ''}
+            </span>
+          </div>
+        ))}
+      </div>
+    )}
     </div>
   )
 }

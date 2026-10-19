@@ -398,7 +398,10 @@ class ToolDiscovery:
             if isinstance(content, list):
                 for item in content:
                     if isinstance(item, dict) and item.get("type") == "text":
-                        parts.append(item.get("text", ""))
+                        # A probed tool that "accepts bad input" may echo back a
+                        # non-string value (e.g. the wrong_type test's int) in a
+                        # text field — coerce so probing itself never crashes on it.
+                        parts.append(str(item.get("text", "")))
             elif isinstance(content, str):
                 parts.append(content)
         return " ".join(parts)

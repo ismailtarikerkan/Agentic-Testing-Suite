@@ -32,7 +32,7 @@ features:
   dashboard: true
 
 discovery:
-  schema_probing: false
+  schema_probing: true
   hidden_tool_detection: false
   tech_fingerprinting: false
   change_detection: false
