@@ -188,20 +188,33 @@ class StdioTransport(BaseTransport):
         except Exception as exc:
             logger.warning("Failed to send notification to backend '%s': %s", backend_name, exc)
 
+    async def _terminate(self, name: str, proc: asyncio.subprocess.Process) -> None:
+        logger.info("Terminating backend '%s' (pid=%s).", name, proc.pid)
+        try:
+            os.killpg(proc.pid, signal.SIGTERM)
+            await asyncio.wait_for(proc.wait(), timeout=5.0)
+        except asyncio.TimeoutError:
+            logger.warning("Backend '%s' did not exit; killing.", name)
+            os.killpg(proc.pid, signal.SIGKILL)
+            await proc.wait()
+        except ProcessLookupError:
+            pass
+
+    async def remove_backend(self, name: str) -> bool:
+        """Stop and forget a single backend — for live/hot-remove."""
+        proc = self._processes.get(name)
+        if proc is not None and proc.returncode is None:
+            await self._terminate(name, proc)
+        self._processes.pop(name, None)
+        self._backend_configs.pop(name, None)
+        self._locks.pop(name, None)
+        return True
+
     async def close(self) -> None:
         for name, proc in list(self._processes.items()):
             if proc.returncode is not None:
                 continue
-            logger.info("Terminating backend '%s' (pid=%s).", name, proc.pid)
-            try:
-                os.killpg(proc.pid, signal.SIGTERM)
-                await asyncio.wait_for(proc.wait(), timeout=5.0)
-            except asyncio.TimeoutError:
-                logger.warning("Backend '%s' did not exit; killing.", name)
-                os.killpg(proc.pid, signal.SIGKILL)
-                await proc.wait()
-            except ProcessLookupError:
-                pass
+            await self._terminate(name, proc)
         self._processes.clear()
 
     # ------------------------------------------------------------------

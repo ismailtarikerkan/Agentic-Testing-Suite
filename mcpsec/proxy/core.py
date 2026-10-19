@@ -281,6 +281,25 @@ class ProxyCore:
             summary["labels"] = {name: self.chain_tracker.get_labels(name) for name in new_tools}
         return summary
 
+    async def remove_backend_live(self, name: str) -> dict[str, Any]:
+        """Stop a backend in the running proxy, rebuild routing/discovery
+        over what remains, and notify connected clients."""
+        assert self._transport is not None
+
+        await self._transport.remove_backend(name)
+
+        backend_names = self._transport.running_backends()
+        self._tools_cache = await self._router.build(self._transport, backend_names)
+        self._repo.save_routing_table(self._router.get_routing_table())
+
+        self.discovery = ToolDiscovery(self._transport, backend_names, self._config)
+        self._discovery_started = True
+        await self._run_discovery()
+
+        await self._notify_tools_changed()
+
+        return {"removed": name, "remaining_backends": backend_names}
+
     async def _notify_tools_changed(self) -> None:
         notif = MCPMessage(method="notifications/tools/list_changed", params={}, raw={})
         if self._transport is not None:

@@ -30,6 +30,15 @@ def _save_config() -> None:
 async def list_backends() -> list[dict[str, Any]]:
     if state.config is None:
         return []
+
+    tool_defs: dict[str, dict[str, Any]] = {}
+    if state.proxy is not None and state.proxy._tools_cache:
+        tool_defs = {t["name"]: t for t in state.proxy._tools_cache if t.get("name")}
+
+    backend_tools: dict[str, list[str]] = {}
+    if state.router is not None:
+        backend_tools = state.router.get_all_tools()
+
     result = []
     for backend in state.config.backends:
         entry = backend.model_dump()
@@ -38,6 +47,20 @@ async def list_backends() -> list[dict[str, Any]]:
         if state.proxy is not None and state.proxy._transport is not None:
             running = backend.name in state.proxy._transport.running_backends()
         entry["status"] = "running" if running else "stopped"
+
+        tools = []
+        for tool_name in backend_tools.get(backend.name, []):
+            tool_def = tool_defs.get(tool_name, {})
+            labels: list[str] = []
+            if state.proxy is not None and state.proxy.chain_tracker is not None:
+                labels = state.proxy.chain_tracker.get_labels(tool_name)
+            tools.append({
+                "name": tool_name,
+                "description": tool_def.get("description", ""),
+                "labels": labels,
+            })
+        entry["tools"] = tools
+
         result.append(entry)
     return result
 
@@ -104,7 +127,18 @@ async def delete_backend(name: str) -> dict[str, Any]:
         if backend.name == name:
             state.config.backends.pop(i)
             _save_config()
-            return {"deleted": name}
+
+            result: dict[str, Any] = {"deleted": name, "live": False}
+            if state.proxy is not None and state.proxy.is_running:
+                try:
+                    live_result = await state.proxy.remove_backend_live(name)
+                    result["live"] = True
+                    result["live_result"] = live_result
+                except Exception as exc:
+                    result["live_error"] = str(exc)
+            else:
+                result["live_error"] = "Proxy not running — removed from config, will take effect on next launch."
+            return result
 
     raise HTTPException(status_code=404, detail=f"Backend '{name}' not found.")
 

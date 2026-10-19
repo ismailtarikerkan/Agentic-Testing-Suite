@@ -61,6 +61,8 @@ export const deleteRule = (id) => del(`/rules/${id}`)
 
 // Backends
 export const fetchBackends = () => get('/backends')
+export const addBackend = (data) => post('/backends', data)
+export const deleteBackend = (name) => del(`/backends/${name}`)
 export const triggerRescan = () => post('/rescan')
 export const resetRuntimeState = () => post('/backends/reset-runtime')
 
