@@ -17,7 +17,11 @@ _CONFIG_PATH = os.path.join(os.path.dirname(__file__), "..", "..", "..", "mcpsec
 def _save_config() -> None:
     if state.config is None:
         return
-    path = os.path.abspath(_CONFIG_PATH)
+    # Write back to whichever config file the proxy was actually started
+    # with (--config), not a hardcoded default — otherwise saving while
+    # running with e.g. mcpsec-demo-config.yaml silently overwrites the
+    # real mcpsec-config.yaml.
+    path = state.config_path or os.path.abspath(_CONFIG_PATH)
     with open(path, "w") as f:
         yaml.dump(state.config.model_dump(), f, default_flow_style=False)
 
@@ -49,9 +53,25 @@ async def add_backend(backend_data: dict[str, Any]) -> dict[str, Any]:
     except Exception as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
+    if any(b.name == new_backend.name for b in state.config.backends):
+        raise HTTPException(status_code=409, detail=f"Backend '{new_backend.name}' already exists.")
+
     state.config.backends.append(new_backend)
     _save_config()
-    return new_backend.model_dump()
+
+    result = new_backend.model_dump()
+    if state.proxy is not None and state.proxy.is_running:
+        try:
+            live_summary = await state.proxy.add_backend_live(new_backend)
+            result["live"] = True
+            result["discovery"] = live_summary
+        except Exception as exc:
+            result["live"] = False
+            result["live_error"] = str(exc)
+    else:
+        result["live"] = False
+        result["live_error"] = "Proxy not running — saved to config, will start on next launch."
+    return result
 
 
 @router.put("/{name}")

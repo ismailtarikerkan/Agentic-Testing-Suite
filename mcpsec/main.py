@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
+import os
 import sys
 
 
@@ -95,6 +96,7 @@ def main() -> None:
     api_state.state.router = core.router
     api_state.state.sessions = core.session_manager
     api_state.state.config = config
+    api_state.state.config_path = os.path.abspath(args.config)
     # chain_tracker and toxic_flow are set on core after discovery runs;
     # state references core directly so they're accessible via state.proxy.chain_tracker
 

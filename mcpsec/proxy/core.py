@@ -16,7 +16,7 @@ _current_send_fn: contextvars.ContextVar[
 ] = contextvars.ContextVar("current_send_fn", default=None)
 
 from ..analysis.regex_filter import analyze_request, analyze_response, redact_credentials
-from ..config import MCPSecConfig
+from ..config import BackendConfig, MCPSecConfig
 from ..discovery.discovery import ToolDiscovery
 from ..enforcement.engine import apply_tainted_escalation, decide, more_restrictive
 from ..storage.repository import EventRepository
@@ -232,6 +232,67 @@ class ProxyCore:
                 )
             except Exception as exc:
                 logger.error("AnomalyDetector init failed (non-fatal): %s", exc)
+
+    # ------------------------------------------------------------------
+    # Live backend registration (hot-add without restart)
+    # ------------------------------------------------------------------
+
+    async def add_backend_live(self, backend: BackendConfig) -> dict[str, Any]:
+        """Spawn a new backend into the running proxy, re-run discovery/toxic-flow
+        for the full (now-larger) backend set, and notify connected clients that
+        the tool list changed. Raises ValueError on a name collision."""
+        assert self._transport is not None
+
+        if backend.name in self._transport.all_backend_names():
+            raise ValueError(f"Backend '{backend.name}' already exists.")
+
+        ok = await self._transport.add_backend(backend)
+        if not ok:
+            raise RuntimeError(f"Failed to spawn backend '{backend.name}'.")
+
+        init_msg = MCPMessage(
+            id=0,
+            method="initialize",
+            params={
+                "protocolVersion": "2024-11-05",
+                "capabilities": {},
+                "clientInfo": {"name": "mcpsec-live-add", "version": "0.1.0"},
+            },
+            raw={},
+        )
+        await self._transport.send_to_backend(backend.name, init_msg)
+        await self._transport.send_notification_to_backend(
+            backend.name, MCPMessage(method="notifications/initialized", params={}, raw={})
+        )
+
+        backend_names = self._transport.running_backends()
+        self._tools_cache = await self._router.build(self._transport, backend_names)
+        self._repo.save_routing_table(self._router.get_routing_table())
+
+        self.discovery = ToolDiscovery(self._transport, backend_names, self._config)
+        self._discovery_started = True
+        await self._run_discovery()
+
+        await self._notify_tools_changed()
+
+        new_tools = self._router.get_all_tools().get(backend.name, [])
+        summary: dict[str, Any] = {"backend": backend.name, "tool_count": len(new_tools), "tools": new_tools}
+        if self.chain_tracker is not None:
+            summary["labels"] = {name: self.chain_tracker.get_labels(name) for name in new_tools}
+        return summary
+
+    async def _notify_tools_changed(self) -> None:
+        notif = MCPMessage(method="notifications/tools/list_changed", params={}, raw={})
+        if self._transport is not None:
+            try:
+                await self._transport.send_to_client(notif)
+            except Exception:
+                pass
+        for send_fn in list(self._sse_clients.values()):
+            try:
+                await send_fn(notif)
+            except Exception:
+                pass
 
     async def _message_loop(self) -> None:
         assert self._transport is not None

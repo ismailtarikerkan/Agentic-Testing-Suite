@@ -18,6 +18,7 @@ class AppState:
     router: "Router | None" = None
     sessions: "SessionManager | None" = None
     config: "MCPSecConfig | None" = None
+    config_path: str | None = None
     discovery: "ToolDiscovery | None" = None
     toxic_flow: "ToxicFlowAnalyzer | None" = None
     chain_tracker: "ChainTracker | None" = None

@@ -24,6 +24,11 @@ class StdioTransport(BaseTransport):
         for backend in self._backend_configs.values():
             await self._spawn(backend)
 
+    async def add_backend(self, backend: BackendConfig) -> bool:
+        """Register and spawn a new backend after start() — for live/hot-add."""
+        self._backend_configs[backend.name] = backend
+        return await self._spawn(backend)
+
     async def _spawn(self, backend: BackendConfig) -> bool:
         if backend.command is None:
             logger.error("Backend '%s' has no command configured.", backend.name)
