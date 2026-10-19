@@ -61,5 +61,16 @@ def init_db() -> None:
                 updated_at TEXT NOT NULL
             )
         """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS tool_changes (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                detected_at  TEXT NOT NULL,
+                backend_name TEXT NOT NULL,
+                tool_name    TEXT NOT NULL,
+                change_type  TEXT NOT NULL,
+                severity     TEXT NOT NULL,
+                fields       TEXT NOT NULL
+            )
+        """)
     conn.close()
     logger.info("SQLite DB ready: %s", _DB_PATH)

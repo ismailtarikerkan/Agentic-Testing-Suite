@@ -77,3 +77,6 @@ export const updateAnomalyConfig = (cfg) => put('/anomaly-config', cfg)
 // Scenarios
 export const fetchScenarios = () => get('/scenarios')
 export const runScenario = (id) => post(`/scenarios/${id}/run`)
+
+// Tool changes
+export const fetchToolChanges = (limit) => get(`/tool-changes${limit ? '?limit=' + limit : ''}`)

@@ -11,6 +11,7 @@ import RulesPanel from './components/RulesPanel'
 import BackendsPanel from './components/BackendsPanel'
 import AnomalyPanel from './components/AnomalyPanel'
 import ScenariosPanel from './components/ScenariosPanel'
+import ToolChangesPanel from './components/ToolChangesPanel'
 import { fetchSessions, fetchStats } from './api'
 import { createWebSocket } from './ws'
 
@@ -151,6 +152,7 @@ export default function App() {
           )}
           {page === 'anomaly' && <AnomalyPanel />}
           {page === 'scenarios' && <ScenariosPanel />}
+          {page === 'tool-changes' && <ToolChangesPanel />}
         </main>
       </div>
     </div>

@@ -245,6 +245,38 @@ class EventRepository:
         conn.close()
         return {r["tool_name"]: json.loads(r["labels"]) for r in rows}
 
+    def save_tool_change(self, change: dict[str, Any]) -> None:
+        now = datetime.now(tz=timezone.utc).isoformat()
+        with self._lock:
+            conn = get_connection()
+            with conn:
+                conn.execute("""
+                    INSERT INTO tool_changes
+                        (detected_at, backend_name, tool_name, change_type, severity, fields)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                """, (
+                    now,
+                    change.get("backend", ""),
+                    change.get("tool", ""),
+                    change.get("change_type", "unknown"),
+                    change.get("severity", "LOW"),
+                    json.dumps(change.get("fields", [])),
+                ))
+            conn.close()
+
+    def get_tool_changes(self, limit: int = 100) -> list[dict[str, Any]]:
+        conn = get_connection()
+        rows = conn.execute(
+            "SELECT * FROM tool_changes ORDER BY id DESC LIMIT ?", (limit,)
+        ).fetchall()
+        conn.close()
+        results = []
+        for r in rows:
+            d = dict(r)
+            d["fields"] = json.loads(d["fields"])
+            results.append(d)
+        return results
+
     def get_stats(self) -> dict[str, Any]:
         conn = get_connection()
         sessions_total = conn.execute("SELECT COUNT(*) FROM sessions").fetchone()[0]

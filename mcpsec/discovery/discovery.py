@@ -153,6 +153,7 @@ class ToolDiscovery:
         if previous_result and getattr(disc_config, "change_detection", True):
             changes = self._detect_changes(previous_result, {"backends": backends_data})
             for change in changes:
+                self._persist_change(change)
                 if change.get("severity") == "CRITICAL":
                     logger.warning(
                         "CRITICAL tool change detected: %s/%s — %s",
@@ -742,17 +743,21 @@ class ToolDiscovery:
                 len(critical),
             )
 
+    def _persist_change(self, change: dict) -> None:
+        try:
+            from ..storage.repository import EventRepository  # noqa: PLC0415
+
+            EventRepository().save_tool_change(change)
+        except Exception as exc:
+            logger.error("Failed to persist tool change: %s", exc)
+
     async def _broadcast_change(self, change: dict) -> None:
         try:
-            from api.websocket import broadcast_event  # noqa: PLC0415
-            from proxy.session import SessionEvent  # noqa: PLC0415
-            from datetime import datetime, timezone  # noqa: PLC0415
-            event = SessionEvent(
-                timestamp=datetime.now(tz=timezone.utc),
-                direction="discovery",
-                tool_name=change.get("tool", ""),
-                content=change,
-            )
-            await broadcast_event("discovery", event)
-        except Exception:
-            pass
+            from ..api.websocket import broadcast_raw  # noqa: PLC0415
+
+            payload = dict(change)
+            payload["type"] = "tool_change"
+            payload["timestamp"] = datetime.now(tz=timezone.utc).isoformat()
+            await broadcast_raw(payload)
+        except Exception as exc:
+            logger.debug("Failed to broadcast tool change: %s", exc)
