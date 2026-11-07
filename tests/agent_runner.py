@@ -14,7 +14,7 @@ from tests.agent_types import AgentRunResult, find_scenario  # noqa: E402
 from tests.harness import load_scenario  # noqa: E402
 
 MODES = ("baseline", "protected")
-ENGINES = ("cli", "api")
+ENGINES = ("cli", "api", "ollama", "openrouter")
 
 
 def _print_transcript(result: AgentRunResult) -> None:
@@ -53,6 +53,14 @@ def run_mode(scenario: dict, mode: str, engine: str) -> AgentRunResult:
         from tests.agent_harness_cli import run_agent_scenario_cli as run
 
         result = run(scenario, mode)  # type: ignore[arg-type]
+    elif engine == "ollama":
+        from tests.agent_harness_ollama import run_agent_scenario_ollama as run
+
+        result = run(scenario, mode)  # type: ignore[arg-type]
+    elif engine == "openrouter":
+        from tests.agent_harness_openrouter import run_agent_scenario_openrouter as run
+
+        result = run(scenario, mode)  # type: ignore[arg-type]
     else:
         from tests.agent_harness import run_agent_scenario as run
 
@@ -72,7 +80,11 @@ def main() -> None:
         choices=ENGINES,
         default="cli",
         help="cli: drive the `claude` CLI (no API key needed). "
-        "api: call the Anthropic Messages API directly (needs ANTHROPIC_API_KEY).",
+        "api: call the Anthropic Messages API directly (needs ANTHROPIC_API_KEY). "
+        "ollama: drive a local model via Ollama's native tool-calling API "
+        "(needs `ollama serve` running). "
+        "openrouter: drive a hosted model via OpenRouter's OpenAI-compatible "
+        "API (needs OPENROUTER_API_KEY).",
     )
     parser.add_argument(
         "--model",
@@ -80,12 +92,35 @@ def main() -> None:
         help="Override the scenario's `model` field (e.g. 'haiku', 'sonnet', "
         "'claude-haiku-4-5'). Useful for comparing attack success rate across model tiers.",
     )
+    parser.add_argument(
+        "--exclude-tool",
+        action="append",
+        default=None,
+        help="Hide a tool from the model's tool list (repeatable). E.g. "
+        "--exclude-tool sanitize_content to see whether the model falls for "
+        "an injection when it has no 'sanitize'-named tool to reflexively "
+        "reach for. Only supported by the api/ollama/openrouter engines "
+        "(the cli engine lets Claude Code discover tools on its own).",
+    )
     args = parser.parse_args()
 
     scenario_path = find_scenario(args.scenario)
     scenario = load_scenario(scenario_path)
     if args.model:
         scenario = {**scenario, "model": args.model}
+    elif args.engine == "ollama":
+        # Scenario files hardcode a Claude model name for the cli/api engines;
+        # that's not a valid Ollama tag, so fall back to the engine's own
+        # default instead of passing it through unchanged.
+        from tests.agent_harness_ollama import DEFAULT_MODEL as _OLLAMA_DEFAULT_MODEL
+
+        scenario = {**scenario, "model": _OLLAMA_DEFAULT_MODEL}
+    elif args.engine == "openrouter":
+        from tests.agent_harness_openrouter import DEFAULT_MODEL as _OPENROUTER_DEFAULT_MODEL
+
+        scenario = {**scenario, "model": _OPENROUTER_DEFAULT_MODEL}
+    if args.exclude_tool:
+        scenario = {**scenario, "exclude_tools": args.exclude_tool}
 
     modes = MODES if args.mode == "both" else (args.mode,)
     for mode in modes:

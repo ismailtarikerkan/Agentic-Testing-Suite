@@ -126,6 +126,9 @@ def run_agent_scenario(scenario: dict[str, Any], mode: Mode) -> AgentRunResult:
         if mode == "protected":
             wait_for_analysis()
         mcp_tools = tools_response.get("result", {}).get("tools", [])
+        exclude_tools = set(scenario.get("exclude_tools", []))
+        if exclude_tools:
+            mcp_tools = [t for t in mcp_tools if t["name"] not in exclude_tools]
         anthropic_tools = mcp_tools_to_anthropic(mcp_tools)
 
         messages: list[dict[str, Any]] = [
